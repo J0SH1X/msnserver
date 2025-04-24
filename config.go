@@ -16,8 +16,18 @@ type ServerConfig struct {
 	Sslport   int    `json:"sslport"`
 }
 
+  type DataBase struct {
+	Host string `json:"host"`
+	Port string `json:"port"`
+	User string `json:"user"`
+	Password string `json:"password"`
+	Database string `json:"database"`
+	DoAutoMigrate bool `json:"doautomigrate"`
+  }
+
 type Config struct {
 	Server ServerConfig `json:"server"`
+	DB DataBase `json:"db"`
 }
 
 

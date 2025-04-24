@@ -7,5 +7,13 @@
       "ssl": true,
       "msnpport": 1863,
       "sslport": 443
+    },
+    "db": {
+      "host": "127.0.0.1",
+      "port": "3306",
+      "user": "user",
+      "password": "versecretpassword",
+      "database": "msnserver",
+      "doautomigrate": true
     }
   }
