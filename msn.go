@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"strings"
-	"bytes"
-	"encoding/xml"
-	"encoding/json"
-	"io/ioutil"
 	"strconv"
 )
 
 var GlobalConfig Config
 
-func handleMSNPConnection(conn net.Conn) {
+func handleMSNPRequest(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
@@ -58,31 +55,20 @@ func handleMSNPConnection(conn net.Conn) {
 		
 
 		case "USR":
+			//USR 48 TWN S ct=1,rver=1,wp=FS_40SEC_0_COMPACT,lc=1,id=1\r\n
 			if len(parts) >= 5 && parts[2] == "TWN" && parts[3] == "I" {
-				email := parts[4]
-				fakeToken := "ct=1234567890,rn=fakeredirect"
+				fakeToken := "ct=1,rver=1,wp=FS40SEC_0_COMPACT,lc=1,id=1"
 				fmt.Fprintf(conn, "USR %s TWN S %s\r\n", trID, fakeToken)
-				log.Printf("MSNP: Sent fake Passport challenge for %s", email)
+				log.Printf("MSNP: Received USR command, responding with: USR %s TWN S %s\r\n", trID, fakeToken)
 			}
+		
+		case "PNG":
+			fmt.Fprintf(conn,"QNG 60")
 
 		default:
 			log.Printf("MSNP: Unhandled command: %s", cmd)
 		}
 	}
-}
-
-func handleSOAPRequest(data []byte) {
-	var env Envelope
-	decoder := xml.NewDecoder(bytes.NewReader(data))
-	decoder.DefaultSpace = "http://schemas.xmlsoap.org/soap/envelope/"
-	err := decoder.Decode(&env)
-	if err != nil {
-		log.Printf("Failed to parse SOAP XML: %v", err)
-		return
-	}
-
-	log.Printf("Parsed Username: %s", env.Header.Security.UsernameToken.Username)
-	log.Printf("Parsed Password: %s", env.Header.Security.UsernameToken.Password)
 }
 
 func listenTCP(port string) {
@@ -98,71 +84,30 @@ func listenTCP(port string) {
 			log.Println("Connection error:", err)
 			continue
 		}
-		go handleMSNPConnection(conn)
+		go handleMSNPRequest(conn)
 	}
 }
 
-func listenSSL(port string, certFile, keyFile string) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		log.Fatalf("SSL: Error loading SSL certificate: %v", err)
-	}
+func listenSSL(port, certFile, keyFile string) {
+	http.HandleFunc("/RST.srf", handlePassPortLogin)
 
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		//tls1.2
-		MinVersion:   tls.VersionTLS12,
-		MaxVersion:   tls.VersionTLS12,
+		MinVersion: tls.VersionTLS12,
+		MaxVersion: tls.VersionTLS12,
 	}
 
-	tlsListener, err := tls.Listen("tcp", port, tlsConfig)
+	server := &http.Server{
+		Addr:      port,
+		Handler:   nil,
+		TLSConfig: tlsConfig,
+	}
+
+	log.Printf("SSL: MSN server running on port %s with TLS 1.2...", port)
+	err := server.ListenAndServeTLS(certFile, keyFile)
 	if err != nil {
-		log.Fatalf("SSL: Error starting SSL listener on %s: %v", port, err)
-	}
-	log.Printf("SSL: MSN server running on SSL port %s...", port)
-
-	for {
-		conn, err := tlsListener.Accept()
-		if err != nil {
-			log.Println("SSL: SSL Connection error:", err)
-			continue
-		}
-
-		go func() {
-			buf := make([]byte, 1024)
-			for {
-				n, err := conn.Read(buf)
-				if err != nil {
-					log.Println("SSL: Error reading from SSL connection:", err)
-					return
-				}
-				log.Printf("SSL: SSL - Received %d bytes: %s", n, string(buf[:n]))
-				handleSOAPRequest(buf[:n])
-			}
-		}()
+		log.Fatalf("SSL: Error starting HTTPS server: %v", err)
 	}
 }
-
-
-func loadConfig(filename string) (Config, error) {
-	var config Config
-
-	// Read the file content
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return config, fmt.Errorf("could not read config file: %v", err)
-	}
-
-	// Unmarshal the JSON data into the Config struct
-	err = json.Unmarshal(data, &config)
-	if err != nil {
-		return config, fmt.Errorf("could not parse config: %v", err)
-	}
-
-	return config, nil
-}
-
-
 
 func main() {
 
@@ -174,10 +119,7 @@ func main() {
 	GlobalConfig = config
 
 	go listenTCP(":" + strconv.Itoa(config.Server.Msnpport))
-
-	certFile := config.Server.Certpath
-	keyFile := config.Server.Keypath
-	go listenSSL(":" + strconv.Itoa(config.Server.Sslport), certFile, keyFile)
+	go listenSSL(":" + strconv.Itoa(config.Server.Sslport), config.Server.Certpath, config.Server.Keypath)
 
 	select {}
 }
