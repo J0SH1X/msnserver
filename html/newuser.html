@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Register - MSN Messanger</title>
+    <link rel="stylesheet" href="https://unpkg.com/xp.css" />
+    <style>
+      body {
+        background-color: #008080;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+      }
+      .window {
+        width: 400px;
+      }
+      .field-group {
+        margin-bottom: 1em;
+      }
+      .field-label {
+        width: 120px;
+        display: inline-block;
+      }
+      input[type="text"],
+      input[type="email"],
+      input[type="password"] {
+        width: 200px;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      const windowDiv = document.createElement("div");
+      windowDiv.className = "window";
+
+      const titleBar = document.createElement("div");
+      titleBar.className = "title-bar";
+
+      const titleBarText = document.createElement("div");
+      titleBarText.className = "title-bar-text";
+      titleBarText.textContent = "Register";
+
+      const titleBarControls = document.createElement("div");
+      titleBarControls.className = "title-bar-controls";
+      ["Minimize", "Maximize", "Close"].forEach(label => {
+        const btn = document.createElement("button");
+        btn.setAttribute("aria-label", label);
+        titleBarControls.appendChild(btn);
+      });
+
+      titleBar.appendChild(titleBarText);
+      titleBar.appendChild(titleBarControls);
+
+      const windowBody = document.createElement("div");
+      windowBody.className = "window-body";
+
+      const form = document.createElement("form");
+
+      const createField = (labelText, type, name) => {
+        const fieldRow = document.createElement("div");
+        fieldRow.className = "field-row-stacked field-group";
+
+        const label = document.createElement("label");
+        label.textContent = labelText;
+
+        const input = document.createElement("input");
+        input.type = type;
+        input.name = name;
+
+        fieldRow.appendChild(label);
+        fieldRow.appendChild(input);
+        return fieldRow;
+      };
+
+      form.appendChild(createField("Username:", "text", "username"));
+      form.appendChild(createField("Email:", "email", "email"));
+      form.appendChild(createField("Password:", "password", "password"));
+      form.appendChild(createField("Confirm Password:", "password", "confirmPassword"));
+
+      const submitBtn = document.createElement("button");
+      submitBtn.type = "submit";
+      submitBtn.textContent = "Register";
+      submitBtn.className = "btn";
+
+      form.appendChild(submitBtn);
+      windowBody.appendChild(form);
+
+      windowDiv.appendChild(titleBar);
+      windowDiv.appendChild(windowBody);
+      document.body.appendChild(windowDiv);
+
+      form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const username = form.elements["username"].value;
+  const email = form.elements["email"].value;
+  const password = form.elements["password"].value;
+  const confirmPassword = form.elements["confirmPassword"].value;
+
+  if (password !== confirmPassword) {
+    alert("Passwords do not match!");
+    return;
+  }
+
+  const data = {
+    Username: username,
+    Email: email,
+    Password: password
+  };
+
+  try {
+    const response = await fetch("https://localhost:443/useradd", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      alert("Error: " + errorText);
+    } else {
+      const result = await response.json();
+      alert("User registered successfully!");
+      console.log(result);
+    }
+  } catch (err) {
+    console.error("Request failed", err);
+    alert("Failed to connect to the server.");
+  }
+});
+
+
+    </script>
+  </body>
+</html>
