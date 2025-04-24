@@ -1,0 +1,11 @@
+{
+    "server": {
+      "certpath": "pathtocert",
+      "keypath": "pathtokey",
+      "hostname": "hostname",
+      "debug": true,
+      "ssl": true,
+      "msnpport": 1863,
+      "sslport": 443
+    }
+  }
