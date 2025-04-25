@@ -9,9 +9,51 @@ import (
 	"net/http"
 	"strings"
 	"strconv"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"crypto/cipher"
+	"crypto/des"
+	"crypto/rand"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
+	"io"
+	"bytes"
 )
 
 var GlobalConfig Config
+
+
+func generateCipherValue(plaintext string, key []byte) (string, error) {
+	block, err := des.NewTripleDESCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	iv := make([]byte, des.BlockSize)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return "", err
+	}
+
+	padding := des.BlockSize - len(plaintext)%des.BlockSize
+	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
+	padded := append([]byte(plaintext), padtext...)
+
+	ciphertext := make([]byte, len(padded))
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext, padded)
+
+	final := append(iv, ciphertext...)
+
+	cipherValue := base64.StdEncoding.EncodeToString(final)
+
+	return cipherValue, nil
+}
+
+func getMD5Hash(text string) string {
+	hash := md5.Sum([]byte(text))
+	return hex.EncodeToString(hash[:])
+ }
 
 func handleMSNPRequest(conn net.Conn) {
 	defer conn.Close()
@@ -56,10 +98,16 @@ func handleMSNPRequest(conn net.Conn) {
 
 		case "USR":
 			//USR 48 TWN S ct=1,rver=1,wp=FS_40SEC_0_COMPACT,lc=1,id=1\r\n
+			email := parts[4]
 			if len(parts) >= 5 && parts[2] == "TWN" && parts[3] == "I" {
 				fakeToken := "ct=1,rver=1,wp=FS40SEC_0_COMPACT,lc=1,id=1"
 				fmt.Fprintf(conn, "USR %s TWN S %s\r\n", trID, fakeToken)
 				log.Printf("MSNP: Received USR command, responding with: USR %s TWN S %s\r\n", trID, fakeToken)
+			}
+			if len(parts) >= 5 && parts[2] == "TWN" && parts[3] == "S" {
+				log.Println("https challange passed")
+				log.Println("email is %s", email)
+				//fmt.Fprintf(conn, "USR %s OK %s 1 0", trID,email)
 			}
 		
 		case "PNG":
@@ -88,8 +136,19 @@ func listenTCP(port string) {
 	}
 }
 
-func listenSSL(port, certFile, keyFile string) {
-	http.HandleFunc("/RST.srf", handlePassPortLogin)
+func listenSSL(db *gorm.DB, port, certFile, keyFile string) {
+	http.HandleFunc("/RST.srf", func(w http.ResponseWriter, r *http.Request) {
+		handlePassPortLogin(db, w, r)
+	})
+	http.HandleFunc("/useradd", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.ServeFile(w, r, "html/newuser.html")
+		} else if r.Method == http.MethodPost {
+			addUser(db, w, r)
+		} else {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -110,16 +169,24 @@ func listenSSL(port, certFile, keyFile string) {
 }
 
 func main() {
-
-
 	config, err := loadConfig("config.json")
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
 	GlobalConfig = config
 
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",GlobalConfig.DB.User, GlobalConfig.DB.Password, GlobalConfig.DB.Host, GlobalConfig.DB.Port, GlobalConfig.DB.Database)
+	db, err1 := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err1 != nil {
+		log.Fatal("failed to connect to the database:", err)
+	}
+
+	if (config.DB.DoAutoMigrate){
+		db.AutoMigrate(&User{})
+	}
+
 	go listenTCP(":" + strconv.Itoa(config.Server.Msnpport))
-	go listenSSL(":" + strconv.Itoa(config.Server.Sslport), config.Server.Certpath, config.Server.Keypath)
+	go listenSSL(db,":" + strconv.Itoa(config.Server.Sslport), config.Server.Certpath, config.Server.Keypath)
 
 	select {}
 }

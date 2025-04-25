@@ -3,3 +3,5 @@ config.json
 *.crt
 *.txt
 msnserver
+ciphertests
+research
