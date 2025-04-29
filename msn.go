@@ -17,9 +17,29 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/xml"
 	"io"
 	"bytes"
 )
+
+
+type ShieldsXML struct{
+	XMLName xml.Name `xml:"config"`
+	Shield Shield `xml:"shield"`
+	Block string `xml:"block"`
+}
+
+type Shield struct{
+	Cli Cli `xml:"cli"`
+}
+
+type Cli struct{
+	Maj string `xml:"maj,attr"`
+	Min string `xml:"min,attr"`
+	Minbld string `xml:"minbld,attr"`
+	Maxbld string `xml:"maxbld,attr"`
+	Deny   string `xml:"deny,attr"`
+}
 
 var GlobalConfig Config
 
@@ -55,7 +75,7 @@ func getMD5Hash(text string) string {
 	return hex.EncodeToString(hash[:])
  }
 
-func handleMSNPRequest(conn net.Conn) {
+func handleMSNPRequest(conn net.Conn, db *gorm.DB) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
@@ -98,28 +118,122 @@ func handleMSNPRequest(conn net.Conn) {
 
 		case "USR":
 			//USR 48 TWN S ct=1,rver=1,wp=FS_40SEC_0_COMPACT,lc=1,id=1\r\n
-			email := parts[4]
+			userSessionToken := parts[4]
 			if len(parts) >= 5 && parts[2] == "TWN" && parts[3] == "I" {
 				fakeToken := "ct=1,rver=1,wp=FS40SEC_0_COMPACT,lc=1,id=1"
 				fmt.Fprintf(conn, "USR %s TWN S %s\r\n", trID, fakeToken)
 				log.Printf("MSNP: Received USR command, responding with: USR %s TWN S %s\r\n", trID, fakeToken)
 			}
 			if len(parts) >= 5 && parts[2] == "TWN" && parts[3] == "S" {
-				log.Println("https challange passed")
-				log.Println("email is %s", email)
-				//fmt.Fprintf(conn, "USR %s OK %s 1 0", trID,email)
+				var user User
+				if err := db.First(&user, "session_token = ?",  userSessionToken).Error; err != nil {
+					log.Println("failed to retrieve user:", err)
+					//idk what to do here tbh probably close the connection
+					conn.Close()
+				} else {
+					//save current ip for later use
+					clientAddr := conn.RemoteAddr().String()
+					clientIpParts := strings.Split(clientAddr, ":")
+					if db.Model(&User{}).Where("id = ?", user.ID).Update("ip", clientIpParts[0]).Error != nil {
+						log.Println("Error updating ClientIP for userID: ", user.ID)
+					}
+					log.Println("https challange passed")
+					fmt.Fprintf(conn, "USR %s OK %s 1 0 \r\n", trID,user.Email)
+					fmt.Fprintf(conn, "SBS 0 null\r\n")
+					body := fmt.Sprintf(
+						"MIME-Version: 1.0\r\n"+
+						"Content-Type: text/x-msmsgsprofile; charset=UTF-8\r\n"+
+						"LoginTime: 1745610395\r\n"+
+						"EmailEnabled: 0\r\n"+
+						"MemberIdHigh: %d\r\n"+
+						"MemberIdLow: %d\r\n"+
+						"lang_preference: 1033\r\n"+
+						"preferredEmail:\r\n"+
+						"country:\r\n"+
+						"PostalCode:\r\n"+
+						"Gender:\r\n"+
+						"Kid: 0\r\n"+
+						"Age:\r\n"+
+						"BDayPre:\r\n"+
+						"Birthday:\r\n"+
+						"Wallet:\r\n"+
+						"Flags: 536872513\r\n"+
+						"sid: 507\r\n"+
+						"MSPAuth: %s\r\n"+
+						"ClientIP: %s\r\n"+
+						"ClientPort: %s\r\n"+
+						"ABCHMigrated: 1\r\n"+
+						"MPOPEnabled: 0\r\n"+
+						"BetaInvites: 1\r\n"+
+						"\r\n",
+						user.ID, user.ID, userSessionToken, clientIpParts[0], clientIpParts[1],
+					)
+					
+					header := fmt.Sprintf("MSG Hotmail Hotmail %d\r\n", len(body))
+					
+					fullMessage := []byte(header + body)
+					
+					_, err := conn.Write(fullMessage)
+					if err != nil {
+						log.Println("Error writing MSG to connection:", err)
+					}
+					
+				}
+			}
+
+		case "SYN":
+			//probly syncs time we just send back what we got here
+			fmt.Fprintf(conn, "SYN %s %s %s 0 0 \r\n" ,trID, "2000-01-01T00:00:00.0-00:00", "2000-01-01T00:00:00.0-00:00")
+			log.Println("Received SYN command, responding with: SYN" ,trID, "2000-01-01T00:00:00.0-00:00", "2000-01-01T00:00:00.0-00:00", "0 0 \r\n")
+			fmt.Fprintf(conn, "GTC A \r\n")
+		case "GCF":
+			//time.Sleep(2 * time.Second) 
+			shieldsXML := ShieldsXML{
+				Shield: Shield{
+					Cli: Cli{
+						Maj:    "7",
+						Min:    "0",
+						Minbld: "0",
+						Maxbld: "9999",
+						Deny:   "audio camera phone",
+					},
+				},
+				Block: "",
+			}
+			xmlBytes, err := xml.MarshalIndent(shieldsXML, "", "\t")
+			if err != nil {
+				log.Println("Error marshaling XML:", err)
+				return
 			}
 		
+			// Include XML header if needed by client
+			xmlData := append([]byte(xml.Header), xmlBytes...)
+		
+			// MSNP12 requires: GCF <trid> Shields.xml <length>\r\n<xml>
+			header := fmt.Sprintf("GCF %s Shields.xml %d\r\n", trID, len(xmlData))
+		
+			fullMessage := append([]byte(header), xmlData...)
+		
+			_, err = conn.Write(fullMessage)
+			if err != nil {
+				log.Println("Error sending XML over TCP:", err)
+			}
+
+			log.Println("Received GCF shields.xml, responding with: ",fullMessage)
 		case "PNG":
 			fmt.Fprintf(conn,"QNG 60")
 
+		case "OUT":
+			//delete session token from DB
+			log.Println("user logout")
+			conn.Close()
 		default:
 			log.Printf("MSNP: Unhandled command: %s", cmd)
 		}
 	}
 }
 
-func listenTCP(port string) {
+func listenTCP(db *gorm.DB,port string) {
 	ln, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatalf("Error starting server on %s: %v", port, err)
@@ -132,7 +246,7 @@ func listenTCP(port string) {
 			log.Println("Connection error:", err)
 			continue
 		}
-		go handleMSNPRequest(conn)
+		go handleMSNPRequest(conn,db)
 	}
 }
 
@@ -185,7 +299,7 @@ func main() {
 		db.AutoMigrate(&User{})
 	}
 
-	go listenTCP(":" + strconv.Itoa(config.Server.Msnpport))
+	go listenTCP(db,":" + strconv.Itoa(config.Server.Msnpport))
 	go listenSSL(db,":" + strconv.Itoa(config.Server.Sslport), config.Server.Certpath, config.Server.Keypath)
 
 	select {}
