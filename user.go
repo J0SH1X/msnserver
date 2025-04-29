@@ -8,6 +8,7 @@ import(
 	"encoding/json"
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
+	"log"
 )
 
 type User struct {
@@ -26,6 +27,8 @@ type User struct {
 	DateCreated       time.Time
 	DateLogin         *time.Time
 	Contacts          datatypes.JSON `gorm:"-"`
+	SessionToken 	  string
+	IP 				  string
 }
 
 
@@ -59,4 +62,13 @@ func addUser(db *gorm.DB, w http.ResponseWriter, r *http.Request) {
 	user.Password = ""
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(user)
+}
+
+func saveSessionToken(userID int, sessionToken string, db *gorm.DB) error {
+    result := db.Model(&User{}).Where("id = ?", userID).Update("session_token", sessionToken)
+    if result.Error != nil {
+        log.Println("Error updating SessionToken:", result.Error)
+        return result.Error
+    }
+    return nil
 }
