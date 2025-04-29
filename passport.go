@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"gorm.io/gorm"
 	"golang.org/x/crypto/bcrypt"
+	"fmt"
 )
 
 type AuthEnvelope struct {
@@ -217,7 +218,7 @@ type SOAPFault struct {
 
 // ======= Function to Craft XML =======
 
-func PassPortAuthFailed() ([]byte, error) {
+func PassPortAuthFailed(errorCode string) ([]byte, error) {
 	serverTime := time.Now().UTC().Format(time.RFC3339)
 
 	envelope := SOAPEnvelope{
@@ -229,7 +230,7 @@ func PassPortAuthFailed() ([]byte, error) {
 			PP: PP{
 				ServerVersion: "1",
 				AuthState:     "0x80048800",
-				ReqStatus:     "0x80048823",
+				ReqStatus:     errorCode,
 				ServerInfo: ServerInfo{
 					Path:                "Live1",
 					RollingUpgradeState: "ExclusiveNew",
@@ -387,7 +388,7 @@ func PassPortAuthSuccess(user *User) ([]byte, error){
 							EncryptedData: nil,
 							BinarySecurityToken: BinarySecurityToken{
 								ID: "Compact2",
-								Value: "t=b5682ea31cfa992f6becY6+H31sTU...",
+								Value: user.SessionToken,
 							},
 						},
 						RequestedTokenReference: RequestedTokenReference{
@@ -426,17 +427,25 @@ func handlePassPortLogin(db *gorm.DB, w http.ResponseWriter, r *http.Request) {
 	var xmlResp []byte
 	if err := db.First(&user, "email = ?",  env.Header.Security.UsernameToken.Username).Error; err != nil {
 		log.Println("failed to retrieve user:", err)
-		xmlResp, err = PassPortAuthFailed()
+		xmlResp, err = PassPortAuthFailed("0x80048823")
 	} else {
 		err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(env.Header.Security.UsernameToken.Password))
 		if err != nil {
 			// Password doesn't match
 			log.Println("pass Wrong")
-			xmlResp, err = PassPortAuthFailed()
+			xmlResp, err = PassPortAuthFailed("0x80048823")
 		} else {
-			// Password is correct
 			log.Println("pass correct")
-			xmlResp, err = PassPortAuthSuccess(&user) //toDO PassPortAuthSuccess
+			salt := []byte("1234567890ABCDEFGHIJKLNM")
+			decryptedToken := fmt.Sprintf("%s+%s+%s", user.Username, user.Password, time.Now().UTC().Format(time.RFC3339))
+			user.SessionToken, err = generateCipherValue(decryptedToken, salt)
+			err = saveSessionToken(user.ID,user.SessionToken,db)
+			if (err != nil){
+				log.Println("cannot generate Sessiontoken: ", err)
+				xmlResp, err = PassPortAuthFailed("0x99999999")
+			}else {
+			xmlResp, err = PassPortAuthSuccess(&user)
+				  }
 		}
 	}
 
